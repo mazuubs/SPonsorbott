@@ -17,6 +17,7 @@ bot = commands.Bot(command_prefix="+", intents=intents)
 OWNER_ID = 1471476071290634305
 DISCORD_API = "https://discord.com/api/v10"
 BLUE = 1
+GREEN = 3
 GRAY = 2
 RED = 4
 COMPONENTS_V2 = 32768
