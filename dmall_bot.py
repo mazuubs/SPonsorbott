@@ -120,7 +120,7 @@ def build_panel_components() -> list[dict]:
                 action_row(button("⚙️ Options DM", GRAY, "dm_options_btn")),
                 separator(),
                 action_row(
-                    button("⭐ Définir le statut", GRAY, "set_status_btn"),
+                    button("⭐ Définir le statut", BLUE, "set_status_btn"),
                     button("🚀 Dmall", RED, "dmall_execute_btn"),
                 ),
                 separator(),
@@ -147,7 +147,7 @@ def build_message_config_components() -> list[dict]:
                     button("🎨 Embed Builder", GRAY, "embed_builder_btn"),
                 ),
                 separator(),
-                text_component(":bulb: **Astuce : Utilisez ces variables dans vos messages**\n```{user}``` → mention du membre\n```{user.id}``` → id du membre\n```{timestamp}``` → date/heure exact"),
+                text_component(":bulb: **Astuce : Utilisez ces variables dans vos messages**\n`{user}` → mention du membre\n`{user.id}` → id du membre\n`{timestamp}` → date/heure exact"),
                 separator(),
                 action_row(
                     button("Aperçu", GRAY, "preview_message_btn"),
