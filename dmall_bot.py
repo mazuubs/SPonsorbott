@@ -447,4 +447,78 @@ class PanelView(discord.ui.View):
         if not self.is_owner(interaction):
             return await interaction.response.send_message("❌ Permission refusée.", ephemeral=True)
         if not config["tokens"]:
-            return
+            return await interaction.response.send_message("❌ Aucun token ajouté. Ajoute au moins un token avant de lancer DM All.", ephemeral=True)
+        if not config["message"] and not config["embed"]:
+            return await interaction.response.send_message("❌ Aucun message configuré. Clique sur 📝 Définir le message avant de lancer DM All.", ephemeral=True)
+        if not interaction.guild:
+            return await interaction.response.send_message("❌ Cette action doit être lancée dans un serveur.", ephemeral=True)
+
+        await interaction.response.send_message("⏳ Préparation de l'envoi...", ephemeral=True)
+        try:
+            await interaction.guild.chunk(cache=True)
+        except Exception:
+            pass
+        members = [member for member in interaction.guild.members if is_member_targeted(member)]
+        total = len(members)
+        if total == 0:
+            return await interaction.followup.send("❌ Aucun membre ne correspond aux statuts sélectionnés.", ephemeral=True)
+
+        sent = 0
+        failed = 0
+        progress_message = await interaction.followup.send(f"📨 Progression : **0/{total}** envoyé(s)", ephemeral=True, wait=True)
+
+        for index, member in enumerate(members, start=1):
+            token = config["tokens"][(index - 1) % len(config["tokens"])]
+            payload = build_dm_payload(member)
+            ok = await send_dm_via_token(token, member.id, payload)
+            if ok:
+                sent += 1
+            else:
+                failed += 1
+
+            if index == total or index % 5 == 0:
+                await progress_message.edit(content=f"📨 Progression : **{index}/{total}** traité(s)\n✅ Envoyés : **{sent}**\n❌ Échecs : **{failed}")
+            await asyncio.sleep(0.8)
+
+        await progress_message.edit(content=f"✅ DM All terminé.\n📨 Total : **{total}**\n✅ Envoyés : **{sent}**\n❌ Échecs : **{failed}**")
+
+
+@bot.command(name="dmall")
+async def dmall_command(ctx: commands.Context):
+    if ctx.author.id != OWNER_ID:
+        return
+
+    try:
+        await ctx.message.delete()
+    except discord.Forbidden:
+        pass
+
+    try:
+        panel = await send_panel_v2(ctx.channel.id)
+    except Exception as exc:
+        await ctx.send(f"❌ Impossible d'envoyer le panneau : `{exc}`", delete_after=10)
+        return
+
+    config["panel_message_id"] = int(panel["id"])
+    config["panel_channel_id"] = int(ctx.channel.id)
+
+
+@bot.event
+async def on_ready():
+    global VIEWS_READY
+    if not VIEWS_READY:
+        bot.add_view(PanelView())
+        bot.add_view(MessageConfigView())
+        VIEWS_READY = True
+    print(f"Connecté en tant que {bot.user} ({bot.user.id})")
+
+
+def main():
+    token = os.environ.get("TOKEN")
+    if not token:
+        raise RuntimeError("Variable d'environnement TOKEN manquante.")
+    bot.run(token)
+
+
+if __name__ == "__main__":
+    main()
