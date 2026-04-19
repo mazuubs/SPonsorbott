@@ -23,6 +23,8 @@ RED = 4
 COMPONENTS_V2 = 32768
 EPHEMERAL = 64
 VIEWS_READY = False
+DMALL_RUNNING = False
+HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
 
 config = {
     "tokens": [],
@@ -163,7 +165,7 @@ def bot_headers(token: str | None = None) -> dict:
 
 
 async def send_panel_v2(channel_id: int) -> dict:
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
         async with session.post(
             f"{DISCORD_API}/channels/{channel_id}/messages",
             json={"flags": COMPONENTS_V2, "components": build_panel_components()},
@@ -179,7 +181,7 @@ async def refresh_panel() -> None:
     if not config["panel_message_id"] or not config["panel_channel_id"]:
         return
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
         async with session.patch(
             f"{DISCORD_API}/channels/{config['panel_channel_id']}/messages/{config['panel_message_id']}",
             json={"flags": COMPONENTS_V2, "components": build_panel_components()},
@@ -189,7 +191,7 @@ async def refresh_panel() -> None:
 
 
 async def get_token_bot_info(token: str) -> dict | None:
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
         async with session.get(f"{DISCORD_API}/users/@me", headers=bot_headers(token)) as response:
             if response.status != 200:
                 return None
@@ -204,7 +206,7 @@ async def get_token_bot_info(token: str) -> dict | None:
 
 async def send_ephemeral_components(interaction: discord.Interaction, components: list[dict]) -> None:
     payload = {"type": 4, "data": {"flags": EPHEMERAL | COMPONENTS_V2, "components": components}}
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
         async with session.post(f"{DISCORD_API}/interactions/{interaction.id}/{interaction.token}/callback", json=payload) as response:
             if response.status >= 400:
                 error_text = await response.text()
@@ -257,24 +259,27 @@ def build_dm_payload(member: discord.Member) -> dict:
 
 
 async def send_dm_via_token(token: str, user_id: int, payload: dict) -> bool:
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{DISCORD_API}/users/@me/channels",
-            json={"recipient_id": str(user_id)},
-            headers=bot_headers(token),
-        ) as response:
-            if response.status != 200:
-                return False
-            channel_id = (await response.json()).get("id")
-            if not channel_id:
-                return False
+    try:
+        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
+            async with session.post(
+                f"{DISCORD_API}/users/@me/channels",
+                json={"recipient_id": str(user_id)},
+                headers=bot_headers(token),
+            ) as response:
+                if response.status != 200:
+                    return False
+                channel_id = (await response.json()).get("id")
+                if not channel_id:
+                    return False
 
-        async with session.post(
-            f"{DISCORD_API}/channels/{channel_id}/messages",
-            json=payload,
-            headers=bot_headers(token),
-        ) as response:
-            return response.status in (200, 201)
+            async with session.post(
+                f"{DISCORD_API}/channels/{channel_id}/messages",
+                json=payload,
+                headers=bot_headers(token),
+            ) as response:
+                return response.status in (200, 201)
+    except (aiohttp.ClientError, asyncio.TimeoutError):
+        return False
 
 
 def is_member_targeted(member: discord.Member) -> bool:
@@ -282,6 +287,14 @@ def is_member_targeted(member: discord.Member) -> bool:
         return False
     status = str(member.status)
     return status in config["status_filter"]
+
+
+async def load_target_members(guild: discord.Guild) -> list[discord.Member]:
+    try:
+        await asyncio.wait_for(guild.chunk(cache=True), timeout=8)
+    except Exception:
+        pass
+    return [member for member in guild.members if is_member_targeted(member)]
 
 
 class TokenModal(discord.ui.Modal, title="🤖 Ajouter un Token"):
@@ -387,11 +400,7 @@ class DmOptionsView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
 
         if interaction.guild:
-            try:
-                await interaction.guild.chunk(cache=True)
-            except Exception:
-                pass
-            total = len([member for member in interaction.guild.members if is_member_targeted(member)])
+            total = len(await load_target_members(interaction.guild))
         else:
             total = 0
 
@@ -507,8 +516,13 @@ class PanelView(discord.ui.View):
 
     @discord.ui.button(label="📨 DM All", style=discord.ButtonStyle.danger, custom_id="dmall_execute_btn")
     async def dmall_execute_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
+        global DMALL_RUNNING
+
         if not self.is_owner(interaction):
             return await interaction.response.send_message("❌ Permission refusée.", ephemeral=True)
+
+        if DMALL_RUNNING:
+            return await interaction.response.send_message("⏳ Un Dmall est déjà en cours. Attends qu'il finisse avant d'en relancer un.", ephemeral=True)
 
         if not config["tokens"]:
             return await interaction.response.send_message("❌ Aucun token ajouté. Ajoute au moins un token avant de lancer DM All.", ephemeral=True)
@@ -519,39 +533,48 @@ class PanelView(discord.ui.View):
         if not interaction.guild:
             return await interaction.response.send_message("❌ Cette action doit être lancée dans un serveur.", ephemeral=True)
 
-        await interaction.response.send_message("⏳ Préparation de l'envoi...", ephemeral=True)
+        DMALL_RUNNING = True
+        progress_message = None
 
         try:
-            await interaction.guild.chunk(cache=True)
-        except Exception:
-            pass
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            progress_message = await interaction.followup.send("⏳ Préparation de l'envoi...", ephemeral=True, wait=True)
 
-        members = [member for member in interaction.guild.members if is_member_targeted(member)]
-        total = len(members)
+            members = await load_target_members(interaction.guild)
+            total = len(members)
 
-        if total == 0:
-            return await interaction.followup.send("❌ Aucun membre ne correspond aux statuts sélectionnés.", ephemeral=True)
+            if total == 0:
+                await progress_message.edit(content="❌ Aucun membre ne correspond aux statuts sélectionnés.")
+                return
 
-        sent = 0
-        failed = 0
-        progress_message = await interaction.followup.send(f"📨 Progression : **0/{total}** envoyé(s)", ephemeral=True, wait=True)
+            sent = 0
+            failed = 0
+            await progress_message.edit(content=f"📨 Progression : **0/{total}** envoyé(s)\n✅ Envoyés : **0**\n❌ Échecs : **0**")
 
-        for index, member in enumerate(members, start=1):
-            token = config["tokens"][(index - 1) % len(config["tokens"])]
-            payload = build_dm_payload(member)
-            ok = await send_dm_via_token(token, member.id, payload)
+            for index, member in enumerate(members, start=1):
+                token = config["tokens"][(index - 1) % len(config["tokens"])]
+                payload = build_dm_payload(member)
+                ok = await send_dm_via_token(token, member.id, payload)
 
-            if ok:
-                sent += 1
+                if ok:
+                    sent += 1
+                else:
+                    failed += 1
+
+                if index == total or index % 3 == 0:
+                    await progress_message.edit(content=f"📨 Progression : **{index}/{total}** traité(s)\n✅ Envoyés : **{sent}**\n❌ Échecs : **{failed}**")
+
+                await asyncio.sleep(0.8)
+
+            await progress_message.edit(content=f"✅ DM All terminé.\n📨 Total : **{total}**\n✅ Envoyés : **{sent}**\n❌ Échecs : **{failed}**")
+        except Exception as exc:
+            error_message = f"❌ Dmall arrêté à cause d'une erreur : `{type(exc).__name__}: {exc}`"
+            if progress_message:
+                await progress_message.edit(content=error_message)
             else:
-                failed += 1
-
-            if index == total or index % 5 == 0:
-                await progress_message.edit(content=f"📨 Progression : **{index}/{total}** traité(s)\n✅ Envoyés : **{sent}**\n❌ Échecs : **{failed}**")
-
-            await asyncio.sleep(0.8)
-
-        await progress_message.edit(content=f"✅ DM All terminé.\n📨 Total : **{total}**\n✅ Envoyés : **{sent}**\n❌ Échecs : **{failed}**")
+                await interaction.followup.send(error_message, ephemeral=True)
+        finally:
+            DMALL_RUNNING = False
 
 
 @bot.command(name="dmall")
