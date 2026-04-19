@@ -107,7 +107,7 @@ def build_panel_components() -> list[dict]:
             "type": 17,
             "accent_color": 0x5865F2,
             "components": [
-                text_component("## `💎` 〃 Configuration du MultiDmall\n*__Utilisez les boutons ci-dessous pour configurer votre Dmall.__**"),
+                text_component("## `💎` 〃 Configuration du UhqZkDmall\n**__Utilisez les boutons ci-dessous pour configurer votre Dmall.__**"),
                 separator(),
                 text_component(f"🤖 **Tokens** — {token_text}"),
                 action_row(button("🤖 Ajouter Token", BLUE, "add_token_btn")),
@@ -123,7 +123,7 @@ def build_panel_components() -> list[dict]:
                     button("📨 DM All", RED, "dmall_execute_btn"),
                 ),
                 separator(),
-                text_component("-# MultiDmall • Réservé au propriétaire"),
+                text_component("-# UhqZkDmall • Crée par **mazuu.bs**"),
             ],
         }
     ]
