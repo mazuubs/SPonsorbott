@@ -138,7 +138,7 @@ def build_message_config_components() -> list[dict]:
                 text_component("## :pencil: 〃 Définir le Message à Envoyer\nChoisissez une méthode pour configurer le message qui sera envoyé aux membres :"),
                 separator(),
                 text_component(":one: **Message texte simple**\nRédigez un message classique."),
-                action_row(button("Saisir un message", BLUE, "simple_message_btn")),
+                action_row(button("✏️ Saisir un message", BLUE, "simple_message_btn")),
                 separator(),
                 text_component(":two: **Embed personnalisé**\nCréez un embed avec titre, description, bouton, etc."),
                 action_row(
