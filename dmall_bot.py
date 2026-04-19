@@ -25,6 +25,7 @@ VIEWS_READY = False
 
 config = {
     "tokens": [],
+    "token_infos": [],
     "message": None,
     "embed": None,
     "button_label": None,
@@ -76,11 +77,30 @@ def short_text(value: str | None, empty: str, limit: int = 90) -> str:
     return value[:limit] + "..." if len(value) > limit else value
 
 
+def build_token_text() -> str:
+    if not config["tokens"]:
+        return "Aucun token ajouté"
+
+    lines = []
+    for index, info in enumerate(config["token_infos"], start=1):
+        name = info.get("name", f"Bot {index}")
+        bot_id = info.get("id")
+        if bot_id:
+            invite = f"https://discord.com/oauth2/authorize?client_id={bot_id}&scope=bot&permissions=8"
+            lines.append(f"`{index}.` **{name}** • [Inviter]({invite})")
+        else:
+            lines.append(f"`{index}.` **{name}**")
+
+    for index in range(len(config["token_infos"]) + 1, len(config["tokens"]) + 1):
+        lines.append(f"`{index}.` **Bot inconnu**")
+
+    return "\n".join(lines)
+
+
 def build_panel_components() -> list[dict]:
-    token_text = f"**{len(config['tokens'])}** token(s) ajouté(s)" if config["tokens"] else "Aucun token ajouté"
+    token_text = build_token_text()
     message_text = short_text(config["message"], "Aucun message texte défini")
     embed_text = "Embed configuré" if config["embed"] else "Aucun embed défini"
-    statuses = " • ".join(STATUS_LABELS[s] for s in config["status_filter"]) if config["status_filter"] else "Aucun"
 
     return [
         {
@@ -98,7 +118,6 @@ def build_panel_components() -> list[dict]:
                 text_component(f"👥 **User IDs à ignorer — Total : {len(config['ignored_ids'])} ID**"),
                 action_row(button("⚙️ Options DM", GRAY, "dm_options_btn")),
                 separator(),
-                text_component(f"⚙️ **Statuts ciblés** — {statuses}"),
                 action_row(
                     button("⭐ Statut", GRAY, "set_status_btn"),
                     button("📨 DM All", RED, "dmall_execute_btn"),
@@ -166,6 +185,20 @@ async def refresh_panel() -> None:
             headers=bot_headers(),
         ):
             pass
+
+
+async def get_token_bot_info(token: str) -> dict | None:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{DISCORD_API}/users/@me", headers=bot_headers(token)) as response:
+            if response.status != 200:
+                return None
+            data = await response.json()
+            bot_id = data.get("id")
+            username = data.get("global_name") or data.get("username") or "Bot inconnu"
+            discriminator = data.get("discriminator")
+            if discriminator and discriminator != "0":
+                username = f"{username}#{discriminator}"
+            return {"id": bot_id, "name": username}
 
 
 async def send_ephemeral_components(interaction: discord.Interaction, components: list[dict]) -> None:
@@ -257,8 +290,18 @@ class TokenModal(discord.ui.Modal, title="🤖 Ajouter un Token"):
         token = self.token_input.value.strip()
         if not token:
             return await interaction.response.send_message("❌ Token vide.", ephemeral=True)
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        bot_info = await get_token_bot_info(token)
+        if not bot_info:
+            return await interaction.followup.send("❌ Token invalide ou impossible de récupérer le bot.", ephemeral=True)
+
         config["tokens"].append(token)
-        await interaction.response.send_message(f"✅ Token ajouté ! Total : **{len(config['tokens'])}** token(s)", ephemeral=True)
+        config["token_infos"].append(bot_info)
+
+        invite = f"https://discord.com/oauth2/authorize?client_id={bot_info['id']}&scope=bot&permissions=8"
+        await interaction.followup.send(f"✅ Token ajouté : **{bot_info['name']}**\n[Inviter le bot]({invite})", ephemeral=True)
         await refresh_panel()
 
 
@@ -336,10 +379,22 @@ class DmOptionsView(discord.ui.View):
     async def on_select(self, interaction: discord.Interaction):
         if interaction.user.id != OWNER_ID:
             return await interaction.response.send_message("❌ Permission refusée.", ephemeral=True)
+
         select = self.children[0]
         config["status_filter"] = list(select.values)
-        selected = " • ".join(STATUS_LABELS[s] for s in config["status_filter"])
-        await interaction.response.send_message(f"✅ Statuts mis à jour : {selected}", ephemeral=True)
+
+        await interaction.response.defer(ephemeral=True)
+
+        if interaction.guild:
+            try:
+                await interaction.guild.chunk(cache=True)
+            except Exception:
+                pass
+            total = len([member for member in interaction.guild.members if is_member_targeted(member)])
+        else:
+            total = 0
+
+        await interaction.followup.send(f"Membre recuperer : `{total}`", ephemeral=True)
         await refresh_panel()
 
 
@@ -386,27 +441,34 @@ class MessageConfigView(discord.ui.View):
     async def preview_message_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
         if not self.is_owner(interaction):
             return await interaction.response.send_message("❌ Permission refusée.", ephemeral=True)
+
         payload = build_dm_payload(interaction.user)
         if not payload:
             return await interaction.response.send_message("❌ Aucun message ou embed configuré.", ephemeral=True)
+
         preview_content = payload.get("content") or "👀 Aperçu du message configuré :"
         if payload.get("content"):
             preview_content = f"👀 Aperçu du message configuré :\n\n{payload['content']}"
+
         embed = discord.Embed.from_dict(payload["embeds"][0]) if payload.get("embeds") else None
         view = None
+
         if config["button_label"] and config["button_url"]:
             view = discord.ui.View()
             view.add_item(discord.ui.Button(label=config["button_label"], url=config["button_url"]))
+
         await interaction.response.send_message(preview_content, embed=embed, view=view, ephemeral=True)
 
     @discord.ui.button(label="Reset", style=discord.ButtonStyle.danger, custom_id="reset_message_btn")
     async def reset_message_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
         if not self.is_owner(interaction):
             return await interaction.response.send_message("❌ Permission refusée.", ephemeral=True)
+
         config["message"] = None
         config["embed"] = None
         config["button_label"] = None
         config["button_url"] = None
+
         await interaction.response.send_message("✅ Message et embed réinitialisés.", ephemeral=True)
         await refresh_panel()
 
@@ -446,20 +508,26 @@ class PanelView(discord.ui.View):
     async def dmall_execute_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
         if not self.is_owner(interaction):
             return await interaction.response.send_message("❌ Permission refusée.", ephemeral=True)
+
         if not config["tokens"]:
             return await interaction.response.send_message("❌ Aucun token ajouté. Ajoute au moins un token avant de lancer DM All.", ephemeral=True)
+
         if not config["message"] and not config["embed"]:
             return await interaction.response.send_message("❌ Aucun message configuré. Clique sur 📝 Définir le message avant de lancer DM All.", ephemeral=True)
+
         if not interaction.guild:
             return await interaction.response.send_message("❌ Cette action doit être lancée dans un serveur.", ephemeral=True)
 
         await interaction.response.send_message("⏳ Préparation de l'envoi...", ephemeral=True)
+
         try:
             await interaction.guild.chunk(cache=True)
         except Exception:
             pass
+
         members = [member for member in interaction.guild.members if is_member_targeted(member)]
         total = len(members)
+
         if total == 0:
             return await interaction.followup.send("❌ Aucun membre ne correspond aux statuts sélectionnés.", ephemeral=True)
 
@@ -471,13 +539,15 @@ class PanelView(discord.ui.View):
             token = config["tokens"][(index - 1) % len(config["tokens"])]
             payload = build_dm_payload(member)
             ok = await send_dm_via_token(token, member.id, payload)
+
             if ok:
                 sent += 1
             else:
                 failed += 1
 
             if index == total or index % 5 == 0:
-                await progress_message.edit(content=f"📨 Progression : **{index}/{total}** traité(s)\n✅ Envoyés : **{sent}**\n❌ Échecs : **{failed}")
+                await progress_message.edit(content=f"📨 Progression : **{index}/{total}** traité(s)\n✅ Envoyés : **{sent}**\n❌ Échecs : **{failed}**")
+
             await asyncio.sleep(0.8)
 
         await progress_message.edit(content=f"✅ DM All terminé.\n📨 Total : **{total}**\n✅ Envoyés : **{sent}**\n❌ Échecs : **{failed}**")
@@ -506,17 +576,21 @@ async def dmall_command(ctx: commands.Context):
 @bot.event
 async def on_ready():
     global VIEWS_READY
+
     if not VIEWS_READY:
         bot.add_view(PanelView())
         bot.add_view(MessageConfigView())
         VIEWS_READY = True
+
     print(f"Connecté en tant que {bot.user} ({bot.user.id})")
 
 
 def main():
     token = os.environ.get("TOKEN")
+
     if not token:
         raise RuntimeError("Variable d'environnement TOKEN manquante.")
+
     bot.run(token)
 
 
