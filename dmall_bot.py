@@ -49,13 +49,6 @@ ACTIVITY_TYPES = {
     "stream": discord.ActivityType.streaming,
 }
 
-STATUS_LABELS = {
-    "online": "🟢 En ligne",
-    "idle": "🟡 Inactif",
-    "dnd": "🔴 Ne pas déranger",
-    "offline": "⚫ Hors ligne",
-}
-
 PERSIST_KEYS = [
     "tokens", "token_infos", "message", "embed",
     "button_label", "button_url", "ignored_ids",
@@ -111,7 +104,6 @@ def short_text(value: str | None, empty: str, limit: int = 90) -> str:
 def build_token_text() -> str:
     if not config["tokens"]:
         return "Aucun token ajouté"
-
     lines = []
     for index, info in enumerate(config["token_infos"], start=1):
         name = info.get("name", f"Bot {index}")
@@ -121,10 +113,8 @@ def build_token_text() -> str:
             lines.append(f"`{index}.` **{name}** • [Inviter]({invite})")
         else:
             lines.append(f"`{index}.` **{name}**")
-
     for index in range(len(config["token_infos"]) + 1, len(config["tokens"]) + 1):
         lines.append(f"`{index}.` **Bot inconnu**")
-
     return "\n".join(lines)
 
 
@@ -132,13 +122,11 @@ def build_dm_options_summary() -> str:
     status_labels = {"online": "🟢", "idle": "🟡", "dnd": "🔴", "offline": "⚫"}
     statuses = " ".join(status_labels.get(s, s) for s in config["status_filter"])
     guilds_count = len(config.get("selected_guild_ids", []))
-
     selected_idx = config.get("selected_token_index", 0)
     if config["token_infos"] and selected_idx < len(config["token_infos"]):
         bot_name = config["token_infos"][selected_idx].get("name", f"Bot {selected_idx + 1}")
     else:
         bot_name = "Non sélectionné"
-
     guild_txt = f"{guilds_count} serveur(s)" if guilds_count else "Aucun"
     return f"🤖 **{bot_name}** • 🌐 {guild_txt} • Statuts: {statuses}"
 
@@ -148,7 +136,6 @@ def build_panel_components() -> list[dict]:
     message_text = short_text(config["message"], "Aucun message texte défini")
     embed_text = "Embed configuré" if config["embed"] else "Aucun embed défini"
     dm_options_text = build_dm_options_summary()
-
     return [
         {
             "type": 17,
@@ -224,7 +211,6 @@ async def send_panel_v2(channel_id: int) -> dict:
 async def refresh_panel() -> None:
     if not config["panel_message_id"] or not config["panel_channel_id"]:
         return
-
     async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
         async with session.patch(
             f"{DISCORD_API}/channels/{config['panel_channel_id']}/messages/{config['panel_message_id']}",
@@ -271,19 +257,16 @@ def apply_variables(value: str | None, member: discord.Member) -> str | None:
 def build_embed_for_member(member: discord.Member) -> dict | None:
     if not config["embed"]:
         return None
-
     embed_data = json.loads(json.dumps(config["embed"]))
     for key in ("title", "description", "url"):
         if key in embed_data and isinstance(embed_data[key], str):
             embed_data[key] = apply_variables(embed_data[key], member)
-
     if "fields" in embed_data and isinstance(embed_data["fields"], list):
         for field in embed_data["fields"]:
             if isinstance(field, dict):
                 for key in ("name", "value"):
                     if key in field and isinstance(field[key], str):
                         field[key] = apply_variables(field[key], member)
-
     return embed_data
 
 
@@ -291,14 +274,12 @@ def build_dm_payload(member: discord.Member) -> dict:
     payload = {}
     content = apply_variables(config["message"], member)
     embed_data = build_embed_for_member(member)
-
     if content:
         payload["content"] = content
     if embed_data:
         payload["embeds"] = [embed_data]
     if config["button_label"] and config["button_url"]:
         payload["components"] = [action_row(link_button(config["button_label"], config["button_url"]))]
-
     return payload
 
 
@@ -315,7 +296,6 @@ async def send_dm_via_token(token: str, user_id: int, payload: dict) -> bool:
                 channel_id = (await response.json()).get("id")
                 if not channel_id:
                     return False
-
             async with session.post(
                 f"{DISCORD_API}/channels/{channel_id}/messages",
                 json=payload,
@@ -349,14 +329,6 @@ async def load_target_members_from_guilds(guild_ids: list[int]) -> list[discord.
     return list(members.values())
 
 
-async def load_target_members(guild: discord.Guild) -> list[discord.Member]:
-    try:
-        await asyncio.wait_for(guild.chunk(cache=True), timeout=8)
-    except Exception:
-        pass
-    return [member for member in guild.members if is_member_targeted(member)]
-
-
 class TokenModal(discord.ui.Modal, title="🤖 Ajouter un Token"):
     token_input = discord.ui.TextInput(label="Token du bot", placeholder="Colle ton token bot ici...", style=discord.TextStyle.short, max_length=120)
 
@@ -364,17 +336,13 @@ class TokenModal(discord.ui.Modal, title="🤖 Ajouter un Token"):
         token = self.token_input.value.strip()
         if not token:
             return await interaction.response.send_message("❌ Token vide.", ephemeral=True)
-
         await interaction.response.defer(ephemeral=True, thinking=True)
-
         bot_info = await get_token_bot_info(token)
         if not bot_info:
             return await interaction.followup.send("❌ Token invalide ou impossible de récupérer le bot.", ephemeral=True)
-
         config["tokens"].append(token)
         config["token_infos"].append(bot_info)
         save_config()
-
         invite = f"https://discord.com/oauth2/authorize?client_id={bot_info['id']}&scope=bot&permissions=8"
         await interaction.followup.send(f"✅ Token ajouté : **{bot_info['name']}**\n[Inviter le bot]({invite})", ephemeral=True)
         await refresh_panel()
@@ -401,7 +369,6 @@ class EmbedJsonModal(discord.ui.Modal, title="Embed JSON"):
             discord.Embed.from_dict(embed_data)
         except Exception:
             return await interaction.response.send_message("❌ JSON embed invalide.", ephemeral=True)
-
         config["embed"] = embed_data
         save_config()
         await interaction.response.send_message("✅ Embed JSON défini !", ephemeral=True)
@@ -422,7 +389,6 @@ class EmbedBuilderModal(discord.ui.Modal, title="Embed Builder"):
         color = self.color_input.value.strip().replace("#", "")
         button_label_value = self.button_label_input.value.strip()
         button_url_value = self.button_url_input.value.strip()
-
         if title:
             embed_data["title"] = title
         if description:
@@ -432,7 +398,6 @@ class EmbedBuilderModal(discord.ui.Modal, title="Embed Builder"):
                 embed_data["color"] = int(color, 16)
             except ValueError:
                 return await interaction.response.send_message("❌ Couleur hex invalide.", ephemeral=True)
-
         config["embed"] = embed_data or None
         config["button_label"] = button_label_value or None
         config["button_url"] = button_url_value or None
@@ -446,33 +411,24 @@ class DmWizardStatusSelect(discord.ui.View):
         super().__init__(timeout=120)
         self.token_index = token_index
         self.guild_ids = guild_ids
-
         options = [
             discord.SelectOption(label="🟢 En ligne", value="online", default="online" in config["status_filter"]),
             discord.SelectOption(label="🟡 Inactif", value="idle", default="idle" in config["status_filter"]),
             discord.SelectOption(label="🔴 DND", value="dnd", default="dnd" in config["status_filter"]),
             discord.SelectOption(label="⚫ Hors ligne", value="offline", default="offline" in config["status_filter"]),
         ]
-        select = discord.ui.Select(
-            placeholder="Sélectionne les statuts à inclure...",
-            min_values=1,
-            max_values=4,
-            options=options,
-        )
+        select = discord.ui.Select(placeholder="Sélectionne les statuts à inclure...", min_values=1, max_values=4, options=options)
         select.callback = self.on_select
         self.add_item(select)
 
     async def on_select(self, interaction: discord.Interaction):
         if interaction.user.id != OWNER_ID:
             return await interaction.response.send_message("❌ Permission refusée.", ephemeral=True)
-
         config["status_filter"] = list(self.children[0].values)
         config["selected_token_index"] = self.token_index
         config["selected_guild_ids"] = self.guild_ids
         save_config()
-
         await interaction.response.defer()
-
         total = 0
         seen: set[int] = set()
         for guild_id in self.guild_ids:
@@ -487,10 +443,8 @@ class DmWizardStatusSelect(discord.ui.View):
                 if member.id not in seen and is_member_targeted(member):
                     seen.add(member.id)
                     total += 1
-
         status_labels = {"online": "🟢 En ligne", "idle": "🟡 Inactif", "dnd": "🔴 DND", "offline": "⚫ Hors ligne"}
         statuses_text = ", ".join(status_labels.get(s, s) for s in config["status_filter"])
-
         await interaction.edit_original_response(
             content=f"✅ Configuration enregistrée.\n👥 **{total}** membre(s) récupéré(s) — Statuts : {statuses_text}",
             view=None,
@@ -502,32 +456,20 @@ class DmWizardGuildSelect(discord.ui.View):
     def __init__(self, token_index: int):
         super().__init__(timeout=120)
         self.token_index = token_index
-
         guilds = bot.guilds
-        options = [
-            discord.SelectOption(label=g.name[:100], value=str(g.id))
-            for g in guilds[:25]
-        ]
+        options = [discord.SelectOption(label=g.name[:100], value=str(g.id)) for g in guilds[:25]]
         if not options:
             options = [discord.SelectOption(label="Aucun serveur accessible", value="0")]
-
-        select = discord.ui.Select(
-            placeholder="Sélectionne un ou plusieurs serveurs...",
-            min_values=1,
-            max_values=min(len(options), 25),
-            options=options,
-        )
+        select = discord.ui.Select(placeholder="Sélectionne un ou plusieurs serveurs...", min_values=1, max_values=min(len(options), 25), options=options)
         select.callback = self.on_select
         self.add_item(select)
 
     async def on_select(self, interaction: discord.Interaction):
         if interaction.user.id != OWNER_ID:
             return await interaction.response.send_message("❌ Permission refusée.", ephemeral=True)
-
         selected_guild_ids = [int(v) for v in self.children[0].values if v != "0"]
         if not selected_guild_ids:
             return await interaction.response.send_message("❌ Aucun serveur valide sélectionné.", ephemeral=True)
-
         view = DmWizardStatusSelect(self.token_index, selected_guild_ids)
         await interaction.response.edit_message(
             content="⚪ 〃 Sélectionnez les statuts pour filtrer les membres\n⚪ Sélectionnez les statuts à inclure",
@@ -538,39 +480,25 @@ class DmWizardGuildSelect(discord.ui.View):
 class DmWizardBotSelect(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=120)
-
         options = []
         for i, info in enumerate(config["token_infos"]):
             name = info.get("name", f"Bot {i + 1}")
             options.append(discord.SelectOption(label=name, value=str(i)))
-
         if not options:
             options = [discord.SelectOption(label="Aucun bot configuré", value="-1")]
-
-        select = discord.ui.Select(
-            placeholder="Sélectionne un bot...",
-            min_values=1,
-            max_values=1,
-            options=options[:25],
-        )
+        select = discord.ui.Select(placeholder="Sélectionne un bot...", min_values=1, max_values=1, options=options[:25])
         select.callback = self.on_select
         self.add_item(select)
 
     async def on_select(self, interaction: discord.Interaction):
         if interaction.user.id != OWNER_ID:
             return await interaction.response.send_message("❌ Permission refusée.", ephemeral=True)
-
         selected_index = int(self.children[0].values[0])
         if selected_index == -1:
             return await interaction.response.send_message("❌ Aucun bot configuré. Ajoute d'abord un token.", ephemeral=True)
-
         guilds = bot.guilds
         if not guilds:
-            return await interaction.response.edit_message(
-                content="❌ Le bot principal n'est dans aucun serveur.",
-                view=None,
-            )
-
+            return await interaction.response.edit_message(content="❌ Le bot principal n'est dans aucun serveur.", view=None)
         view = DmWizardGuildSelect(selected_index)
         await interaction.response.edit_message(
             content="🌐 〃 Sélectionnez les serveurs pour continuer.\n🌐 Sélectionnez un ou plusieurs serveurs",
@@ -621,35 +549,28 @@ class MessageConfigView(discord.ui.View):
     async def preview_message_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
         if not self.is_owner(interaction):
             return await interaction.response.send_message("❌ Permission refusée.", ephemeral=True)
-
         payload = build_dm_payload(interaction.user)
         if not payload:
             return await interaction.response.send_message("❌ Aucun message ou embed configuré.", ephemeral=True)
-
         preview_content = payload.get("content") or "👀 Aperçu du message configuré :"
         if payload.get("content"):
             preview_content = f"👀 Aperçu du message configuré :\n\n{payload['content']}"
-
         embed = discord.Embed.from_dict(payload["embeds"][0]) if payload.get("embeds") else None
         view = None
-
         if config["button_label"] and config["button_url"]:
             view = discord.ui.View()
             view.add_item(discord.ui.Button(label=config["button_label"], url=config["button_url"]))
-
         await interaction.response.send_message(preview_content, embed=embed, view=view, ephemeral=True)
 
     @discord.ui.button(label="Reset", style=discord.ButtonStyle.danger, custom_id="reset_message_btn")
     async def reset_message_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
         if not self.is_owner(interaction):
             return await interaction.response.send_message("❌ Permission refusée.", ephemeral=True)
-
         config["message"] = None
         config["embed"] = None
         config["button_label"] = None
         config["button_url"] = None
         save_config()
-
         await interaction.response.send_message("✅ Message et embed réinitialisés.", ephemeral=True)
         await refresh_panel()
 
@@ -677,19 +598,10 @@ class PanelView(discord.ui.View):
     async def dm_options_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
         if not self.is_owner(interaction):
             return await interaction.response.send_message("❌ Permission refusée.", ephemeral=True)
-
         if not config["tokens"]:
-            return await interaction.response.send_message(
-                "❌ Aucun token configuré. Ajoute d'abord un bot via **🤖 Ajouter Token**.",
-                ephemeral=True,
-            )
-
+            return await interaction.response.send_message("❌ Aucun token configuré. Ajoute d'abord un bot via **🤖 Ajouter Token**.", ephemeral=True)
         view = DmWizardBotSelect()
-        await interaction.response.send_message(
-            "🤖 〃 Sélectionnez un bot pour continuer.\n🤖 Sélectionnez un bot",
-            view=view,
-            ephemeral=True,
-        )
+        await interaction.response.send_message("🤖 〃 Sélectionnez un bot pour continuer.\n🤖 Sélectionnez un bot", view=view, ephemeral=True)
 
     @discord.ui.button(label="⭐ Statut", style=discord.ButtonStyle.secondary, custom_id="set_status_btn")
     async def set_status_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
@@ -700,26 +612,19 @@ class PanelView(discord.ui.View):
     @discord.ui.button(label="📨 DM All", style=discord.ButtonStyle.danger, custom_id="dmall_execute_btn")
     async def dmall_execute_btn(self, interaction: discord.Interaction, _: discord.ui.Button):
         global DMALL_RUNNING
-
         if not self.is_owner(interaction):
             return await interaction.response.send_message("❌ Permission refusée.", ephemeral=True)
-
         if DMALL_RUNNING:
             return await interaction.response.send_message("⏳ Un Dmall est déjà en cours.", ephemeral=True)
-
         if not config["tokens"]:
             return await interaction.response.send_message("❌ Aucun token ajouté.", ephemeral=True)
-
         if not config["message"] and not config["embed"]:
             return await interaction.response.send_message("❌ Aucun message configuré.", ephemeral=True)
-
         guild_ids = config.get("selected_guild_ids") or []
         if not guild_ids and interaction.guild:
             guild_ids = [interaction.guild.id]
-
         if not guild_ids:
             return await interaction.response.send_message("❌ Aucun serveur sélectionné. Configure via **⚙️ Options DM**.", ephemeral=True)
-
         token_index = config.get("selected_token_index", 0)
         if token_index >= len(config["tokens"]):
             token_index = 0
@@ -728,38 +633,60 @@ class PanelView(discord.ui.View):
         DMALL_RUNNING = True
         progress_message = None
 
+        def progress_bar(index: int, total: int, length: int = 10) -> str:
+            filled = round((index / total) * length) if total > 0 else 0
+            return "🟩" * filled + "⬛" * (length - filled)
+
+        def format_progress(sent: int, failed: int, index: int, total: int, member: discord.Member | None = None) -> str:
+            bar = progress_bar(index, total)
+            msg_preview = ""
+            if config["message"]:
+                preview = config["message"][:60].replace("\n", " ")
+                msg_preview = f"\n\n**📝 Message**\n{preview}{'...' if len(config['message']) > 60 else ''}"
+            current = f"\n\n**📤 En cours**\n{member.mention} ({member.name})" if member else ""
+            return (
+                f"**📨 Envoi en cours...**\n\n"
+                f"**✅ Envoyés**\n{sent}\n\n"
+                f"**❌ Échoués**\n{failed}\n\n"
+                f"**📊 Progression**\n{bar} {index}/{total}"
+                f"{current}"
+                f"{msg_preview}"
+            )
+
         try:
             await interaction.response.defer(ephemeral=True, thinking=True)
             progress_message = await interaction.followup.send("⏳ Préparation de l'envoi...", ephemeral=True, wait=True)
-
             members = await load_target_members_from_guilds(guild_ids)
             total = len(members)
-
             if total == 0:
                 await progress_message.edit(content="❌ Aucun membre ne correspond aux filtres sélectionnés.")
                 return
-
             sent = 0
             failed = 0
-            await progress_message.edit(content=f"📨 Progression : **0/{total}** envoyé(s)\n✅ Envoyés : **0**\n❌ Échecs : **0**")
-
             for index, member in enumerate(members, start=1):
                 payload = build_dm_payload(member)
                 ok = await send_dm_via_token(send_token, member.id, payload)
-
                 if ok:
                     sent += 1
                 else:
                     failed += 1
-
-                if index == total or index % 3 == 0:
-                    await progress_message.edit(content=f"📨 Progression : **{index}/{total}** traité(s)\n✅ Envoyés : **{sent}**\n❌ Échecs : **{failed}**")
-
+                if index == 1 or index == total or index % 2 == 0:
+                    await progress_message.edit(content=format_progress(sent, failed, index, total, member))
                 await asyncio.sleep(0.8)
-
-            await progress_message.edit(content=f"✅ DM All terminé.\n📨 Total : **{total}**\n✅ Envoyés : **{sent}**\n❌ Échecs : **{failed}**")
+            bar_final = "🟩" * 10
+            msg_preview = ""
+            if config["message"]:
+                preview = config["message"][:60].replace("\n", " ")
+                msg_preview = f"\n\n**📝 Message**\n{preview}{'...' if len(config['message']) > 60 else ''}"
+            await progress_message.edit(content=(
+                f"**✅ DM All terminé !**\n\n"
+                f"**✅ Envoyés**\n{sent}\n\n"
+                f"**❌ Échoués**\n{failed}\n\n"
+                f"**📊 Progression**\n{bar_final} {total}/{total}"
+                f"{msg_preview}"
+            ))
         except Exception as exc:
-            error_message = f"❌ Dmall arrêté à cause d'une erreur : `{type(exc).__name__}: {exc}`"
+            error_message = f"❌ Dmall arrêté : `{type(exc).__name__}: {exc}`"
             if progress_message:
                 await progress_message.edit(content=error_message)
             else:
@@ -772,18 +699,15 @@ class PanelView(discord.ui.View):
 async def dmall_command(ctx: commands.Context):
     if ctx.author.id != OWNER_ID:
         return
-
     try:
         await ctx.message.delete()
     except discord.Forbidden:
         pass
-
     try:
         panel = await send_panel_v2(ctx.channel.id)
     except Exception as exc:
         await ctx.send(f"❌ Impossible d'envoyer le panneau : `{exc}`", delete_after=10)
         return
-
     config["panel_message_id"] = int(panel["id"])
     config["panel_channel_id"] = int(ctx.channel.id)
 
@@ -791,22 +715,18 @@ async def dmall_command(ctx: commands.Context):
 @bot.event
 async def on_ready():
     global VIEWS_READY
-
     if not VIEWS_READY:
         bot.add_view(PanelView())
         bot.add_view(MessageConfigView())
         VIEWS_READY = True
-
     print(f"Connecté en tant que {bot.user} ({bot.user.id})")
 
 
 def main():
     load_config()
     token = os.environ.get("TOKEN")
-
     if not token:
         raise RuntimeError("Variable d'environnement TOKEN manquante.")
-
     bot.run(token)
 
 
