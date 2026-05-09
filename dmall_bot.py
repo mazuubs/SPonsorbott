@@ -24,6 +24,7 @@ COMPONENTS_V2 = 32768
 EPHEMERAL = 64
 VIEWS_READY = False
 DMALL_RUNNING = False
+DMALL_STOP = False
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
 
@@ -688,7 +689,7 @@ class MessageConfigView(discord.ui.View):
 # ─── Dmall : sélection du bot + progression ───────────────────────────────────
 
 async def run_dmall(interaction, selected_tokens, selected_infos):
-    global DMALL_RUNNING
+    global DMALL_RUNNING, DMALL_STOP
     if DMALL_RUNNING:
         return await interaction.edit_original_response(content="⏳ Un dmall est déjà en cours.", view=None)
 
@@ -697,6 +698,7 @@ async def run_dmall(interaction, selected_tokens, selected_infos):
         return await interaction.edit_original_response(content="❌ Aucune cible.", view=None)
 
     DMALL_RUNNING = True
+    DMALL_STOP = False
     nb = len(selected_tokens)
     per_bot_sent = [0] * nb
     per_bot_failed = [0] * nb
@@ -732,6 +734,8 @@ async def run_dmall(interaction, selected_tokens, selected_infos):
 
     async def bot_worker(tidx, token, chunk):
         for i, uid in enumerate(chunk):
+            if DMALL_STOP:
+                break
             payload = build_dm_payload_for_id(uid)
             if not payload:
                 per_bot_failed[tidx] += 1
@@ -862,6 +866,17 @@ class PanelView(discord.ui.View):
             view=DmallBotPickView(),
             ephemeral=True,
         )
+
+
+@bot.command(name="stop")
+async def stop_cmd(ctx):
+    global DMALL_STOP
+    if ctx.author.id != OWNER_ID:
+        return
+    if not DMALL_RUNNING:
+        return await ctx.send("❌ Aucun dmall en cours.", delete_after=5)
+    DMALL_STOP = True
+    await ctx.send("🛑 Dmall arrêté.", delete_after=5)
 
 
 @bot.command(name="panel")
