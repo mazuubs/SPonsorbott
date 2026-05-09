@@ -508,7 +508,7 @@ class AutresView(discord.ui.View):
         if interaction.user.id != OWNER_ID: return await interaction.response.send_message("❌ Permission refusée.", ephemeral=True)
         await interaction.response.send_modal(RemoveIgnoredIdsModal())
 
-# ─── Menu principal Options DM (persistent V2 view) ──────────────────────────
+# ─── Menu principal Options DM ────────────────────────────────────────────────
 
 class DmOptionsView(discord.ui.View):
     def __init__(self):
@@ -557,7 +557,7 @@ class DmOptionsView(discord.ui.View):
             ephemeral=True,
         )
 
-# ─── Modals message ──────────────────────────────────────────────────────────
+# ─── Modals message ───────────────────────────────────────────────────────────
 
 class TokenModal(discord.ui.Modal, title="🤖 Ajouter des Tokens"):
     token_input = discord.ui.TextInput(
@@ -584,7 +584,6 @@ class TokenModal(discord.ui.Modal, title="🤖 Ajouter des Tokens"):
             config["tokens"].append(token)
             config["token_infos"].append(info)
             invite = f"https://discord.com/oauth2/authorize?client_id={info['id']}&scope=bot&permissions=8"
-            # Envoie un DM de confirmation depuis ce bot à l'owner
             dm_payload = {"content": f"✅ Token ajouté avec succès !\n\nJe suis **{info['name']}** et je suis prêt à envoyer des DMs.\n🔗 [Inviter le bot]({invite})"}
             dm_ok = await send_dm_via_token(token, OWNER_ID, dm_payload)
             dm_status = " ✉️ DM envoyé" if dm_ok else " ⚠️ DM échoué"
@@ -647,7 +646,7 @@ class StatusModal(discord.ui.Modal, title="🎮 Statut du Bot"):
         await bot.change_presence(activity=discord.Activity(type=act, name=self.text_input.value.strip()))
         await interaction.response.send_message(f"✅ Statut : **{t} {self.text_input.value.strip()}**", ephemeral=True)
 
-# ─── MessageConfigView ───────────────────────────────────────────────────────
+# ─── MessageConfigView ────────────────────────────────────────────────────────
 
 class MessageConfigView(discord.ui.View):
     def __init__(self): super().__init__(timeout=None)
@@ -686,7 +685,7 @@ class MessageConfigView(discord.ui.View):
         config["message"] = config["embed"] = config["button_label"] = config["button_url"] = None; save_config()
         await i.response.send_message("✅ Réinitialisé.", ephemeral=True); await refresh_panel()
 
-# ─── PanelView ───────────────────────────────────────────────────────────────
+# ─── PanelView ────────────────────────────────────────────────────────────────
 
 class PanelView(discord.ui.View):
     def __init__(self): super().__init__(timeout=None)
@@ -712,7 +711,7 @@ class PanelView(discord.ui.View):
         if not self.is_owner(i): return await i.response.send_message("❌", ephemeral=True)
         await i.response.send_modal(StatusModal())
 
-    @discord.ui.button(label="📨 DM All", style=discord.ButtonStyle.danger, custom_id="dmall_execute_btn")
+    @discord.ui.button(label="🚀 Dmall", style=discord.ButtonStyle.danger, custom_id="dmall_execute_btn")
     async def dmall_execute_btn(self, interaction, _):
         global DMALL_RUNNING
         if not self.is_owner(interaction): return await interaction.response.send_message("❌", ephemeral=True)
@@ -726,7 +725,6 @@ class PanelView(discord.ui.View):
         target_ids = [uid for uid in config["target_ids"] if uid not in config["ignored_ids"]]
 
         DMALL_RUNNING = True
-        progress_message = None
 
         def bot_name(i):
             if i < len(token_infos):
@@ -750,7 +748,8 @@ class PanelView(discord.ui.View):
             bar = pbar(idx, total)
             mp = ""
             if config["message"]:
-                prev = config["message"][:60].replace("\n", " ")                 mp = f"\n📝 `{prev}{'...' if len(config['message']) > 60 else ''}`"
+                prev = config["message"][:60].replace("\n", " ")
+                mp = f"\n📝 `{prev}{'...' if len(config['message']) > 60 else ''}`"
             cb = f"\n🤖 **{current_bot}**" if current_bot else ""
             uid_line = f"\n👤 Dernier : `{uid}`" if uid else ""
             return (
