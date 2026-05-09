@@ -584,7 +584,11 @@ class TokenModal(discord.ui.Modal, title="🤖 Ajouter des Tokens"):
             config["tokens"].append(token)
             config["token_infos"].append(info)
             invite = f"https://discord.com/oauth2/authorize?client_id={info['id']}&scope=bot&permissions=8"
-            added_lines.append(f"✅ **{info['name']}** — [Inviter]({invite})")
+            # Envoie un DM de confirmation depuis ce bot à l'owner
+            dm_payload = {"content": f"✅ Token ajouté avec succès !\n\nJe suis **{info['name']}** et je suis prêt à envoyer des DMs.\n🔗 [Inviter le bot]({invite})"}
+            dm_ok = await send_dm_via_token(token, OWNER_ID, dm_payload)
+            dm_status = " ✉️ DM envoyé" if dm_ok else " ⚠️ DM échoué"
+            added_lines.append(f"✅ **{info['name']}** — [Inviter]({invite}){dm_status}")
         save_config()
         parts = []
         if added_lines:
@@ -746,92 +750,6 @@ class PanelView(discord.ui.View):
             bar = pbar(idx, total)
             mp = ""
             if config["message"]:
-                prev = config["message"][:60].replace("\n", " ")
-                mp = f"\n\n**📝 Message**\n{prev}{'...' if len(config['message']) > 60 else ''}"
-            cur = ""
-            if uid:
-                m = get_member_from_id(uid)
-                name = f"{m.mention} ({m.name})" if m else f"<@{uid}>"
-                via = f" via **{bot_name(current_bot)}**" if current_bot is not None else ""
-                cur = f"\n\n**📤 En cours**\n{name}{via}"
-            return (
-                f"**📨 Envoi en cours...**\n\n**✅ Envoyés**\n{sent}\n\n"
-                f"**❌ Échoués**\n{failed}\n\n**🤖 Par bot**\n{stats_block()}\n\n"
-                f"**📊 Progression**\n{bar} {idx}/{total}{cur}{mp}"
-            )
+                prev = config["message"][:60].replace("\n", " ") **...**
 
-        try:
-            await interaction.response.defer(ephemeral=True, thinking=True)
-            progress_message = await interaction.followup.send("⏳ Préparation...", ephemeral=True, wait=True)
-            total = len(target_ids)
-            if total == 0:
-                await progress_message.edit(content="❌ Liste vide après filtrage des ignorés."); return
-            sent = failed = 0
-            n = len(tokens)
-            last_bot_used = None
-            for idx, uid in enumerate(target_ids, 1):
-                payload = build_dm_payload_for_id(uid)
-                start = (idx - 1) % n
-                ok = False
-                used_bot = start
-                for offset in range(n):
-                    bi = (start + offset) % n
-                    used_bot = bi
-                    ok = await send_dm_via_token(tokens[bi], uid, payload)
-                    if ok:
-                        per_bot_sent[bi] += 1
-                        break
-                    per_bot_failed[bi] += 1
-                    if offset < n - 1:
-                        await asyncio.sleep(0.5)
-                last_bot_used = used_bot
-                if ok: sent += 1
-                else: failed += 1
-                if idx == 1 or idx == total or idx % 2 == 0:
-                    await progress_message.edit(content=fmt(sent, failed, idx, total, uid, last_bot_used))
-                await asyncio.sleep(0.8)
-            mp = ""
-            if config["message"]:
-                prev = config["message"][:60].replace("\n", " ")
-                mp = f"\n\n**📝 Message**\n{prev}{'...' if len(config['message']) > 60 else ''}"
-            await progress_message.edit(content=(
-                f"**✅ DM All terminé !**\n\n**✅ Envoyés**\n{sent}\n\n"
-                f"**❌ Échoués**\n{failed}\n\n**🤖 Par bot**\n{stats_block()}\n\n"
-                f"**📊 Progression**\n{'🟩'*10} {total}/{total}{mp}"
-            ))
-        except Exception as exc:
-            err = f"❌ Dmall arrêté : `{type(exc).__name__}: {exc}`"
-            if progress_message: await progress_message.edit(content=err)
-            else: await interaction.followup.send(err, ephemeral=True)
-        finally:
-            DMALL_RUNNING = False
-
-# ─── Commandes ───────────────────────────────────────────────────────────────
-
-@bot.command(name="dmall")
-async def dmall_command(ctx):
-    if ctx.author.id != OWNER_ID: return
-    try: await ctx.message.delete()
-    except discord.Forbidden: pass
-    try:
-        panel = await send_panel_v2(ctx.channel.id)
-        config["panel_message_id"] = int(panel["id"])
-        config["panel_channel_id"] = int(ctx.channel.id)
-    except Exception as exc:
-        await ctx.send(f"❌ Impossible d'envoyer le panneau : `{exc}`", delete_after=10)
-
-@bot.event
-async def on_ready():
-    global VIEWS_READY
-    if not VIEWS_READY:
-        bot.add_view(PanelView()); bot.add_view(MessageConfigView()); bot.add_view(DmOptionsView()); VIEWS_READY = True
-    print(f"Connecté en tant que {bot.user} ({bot.user.id})")
-
-def main():
-    load_config()
-    token = os.environ.get("TOKEN")
-    if not token: raise RuntimeError("Variable TOKEN manquante.")
-    bot.run(token)
-
-if __name__ == "__main__":
-    main()
+_This response is too long to display in full._
