@@ -697,81 +697,75 @@ async def run_dmall(interaction, selected_tokens, selected_infos):
         return await interaction.edit_original_response(content="❌ Aucune cible.", view=None)
 
     DMALL_RUNNING = True
-    per_bot_sent = [0] * len(selected_tokens)
-    per_bot_failed = [0] * len(selected_tokens)
+    nb = len(selected_tokens)
+    per_bot_sent = [0] * nb
+    per_bot_failed = [0] * nb
+
+    # Découpe les membres en chunks égaux, un par bot
+    chunks = [target_ids[i::nb] for i in range(nb)]
 
     def bname(i):
         return selected_infos[i].get("name", f"Bot {i+1}") if i < len(selected_infos) else f"Bot {i+1}"
 
-    def pbar(idx, total, length=10):
-        filled = round((idx / total) * length) if total > 0 else 0
-        return "🟩" * filled + "⬛" * (length - filled)
-
     def stats_block():
         return "\n".join(
-            f"• **{bname(i)}** — ✅ {per_bot_sent[i]} / ❌ {per_bot_failed[i]}"
-            for i in range(len(selected_tokens))
+            f"• **{bname(i)}** — ✅ {per_bot_sent[i]} / ❌ {per_bot_failed[i]} ({len(chunks[i])} cibles)"
+            for i in range(nb)
         )
 
-    def fmt(sent, failed, idx, total, uid=None, current_bot=None):
-        bar = pbar(idx, total)
-        mp = ""
-        if config["message"]:
-            prev = config["message"][:60].replace("\n", " ")
-            mp = f"\n📝 `{prev}{'...' if len(config['message']) > 60 else ''}`"
-        cb = f"\n🤖 Bot actif : **{current_bot}**" if current_bot else ""
-        uid_line = f"\n👤 Dernier : `{uid}`" if uid else ""
+    def fmt():
+        total_sent = sum(per_bot_sent)
+        total_failed = sum(per_bot_failed)
+        total_done = total_sent + total_failed
+        total = len(target_ids)
+        filled = round((total_done / total) * 10) if total > 0 else 0
+        bar = "🟩" * filled + "⬛" * (10 - filled)
         return (
-            f"## 🚀 Dmall en cours...\n"
-            f"{bar} `{idx}/{total}`\n"
-            f"✅ **{sent}** envoyé(s) | ❌ **{failed}** échoué(s)"
-            f"{mp}{cb}{uid_line}\n\n"
+            f"## 🚀 Dmall en cours — {nb} bot(s) en parallèle\n"
+            f"{bar} `{total_done}/{total}`\n"
+            f"✅ **{total_sent}** envoyé(s) | ❌ **{total_failed}** échoué(s)\n\n"
             f"{stats_block()}"
         )
 
-    await interaction.edit_original_response(
-        content=fmt(0, 0, 0, len(target_ids)),
-        view=None,
-    )
+    await interaction.edit_original_response(content=fmt(), view=None)
     progress_msg = await interaction.original_response()
 
-    sent_total = 0
-    failed_total = 0
-    bot_index = 0
-    try:
-        for i, uid in enumerate(target_ids):
-            tidx = bot_index % len(selected_tokens)
-            token = selected_tokens[tidx]
-            current = bname(tidx)
+    async def bot_worker(tidx, token, chunk):
+        for i, uid in enumerate(chunk):
             payload = build_dm_payload_for_id(uid)
             if not payload:
-                failed_total += 1
                 per_bot_failed[tidx] += 1
             else:
                 ok = await send_dm_via_token(token, uid, payload)
                 if ok:
-                    sent_total += 1
                     per_bot_sent[tidx] += 1
                 else:
-                    failed_total += 1
                     per_bot_failed[tidx] += 1
-            bot_index += 1
-            if (i + 1) % 3 == 0 or i == len(target_ids) - 1:
-                try:
-                    await progress_msg.edit(
-                        content=fmt(sent_total, failed_total, i + 1, len(target_ids), uid, current)
-                    )
-                except Exception:
-                    pass
-            await asyncio.sleep(1.2)
+            await asyncio.sleep(1.0)
+
+    async def progress_updater():
+        while DMALL_RUNNING:
+            try:
+                await progress_msg.edit(content=fmt())
+            except Exception:
+                pass
+            await asyncio.sleep(3)
+
+    try:
+        workers = [bot_worker(i, selected_tokens[i], chunks[i]) for i in range(nb)]
+        updater = asyncio.create_task(progress_updater())
+        await asyncio.gather(*workers)
     finally:
         DMALL_RUNNING = False
+        updater.cancel()
 
+    total_sent = sum(per_bot_sent)
+    total_failed = sum(per_bot_failed)
     try:
         await progress_msg.edit(
             content=(
                 f"## ✅ Dmall terminé !\n"
-                f"✅ **{sent_total}** envoyé(s) | ❌ **{failed_total}** échoué(s)\n\n"
+                f"✅ **{total_sent}** envoyé(s) | ❌ **{total_failed}** échoué(s)\n\n"
                 f"{stats_block()}"
             )
         )
