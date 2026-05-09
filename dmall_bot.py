@@ -685,6 +685,151 @@ class MessageConfigView(discord.ui.View):
         config["message"] = config["embed"] = config["button_label"] = config["button_url"] = None; save_config()
         await i.response.send_message("✅ Réinitialisé.", ephemeral=True); await refresh_panel()
 
+# ─── Dmall : sélection du bot + progression ───────────────────────────────────
+
+async def run_dmall(interaction, selected_tokens, selected_infos):
+    global DMALL_RUNNING
+    if DMALL_RUNNING:
+        return await interaction.edit_original_response(content="⏳ Un dmall est déjà en cours.", view=None)
+
+    target_ids = [uid for uid in config["target_ids"] if uid not in config["ignored_ids"]]
+    if not target_ids:
+        return await interaction.edit_original_response(content="❌ Aucune cible.", view=None)
+
+    DMALL_RUNNING = True
+    per_bot_sent = [0] * len(selected_tokens)
+    per_bot_failed = [0] * len(selected_tokens)
+
+    def bname(i):
+        return selected_infos[i].get("name", f"Bot {i+1}") if i < len(selected_infos) else f"Bot {i+1}"
+
+    def pbar(idx, total, length=10):
+        filled = round((idx / total) * length) if total > 0 else 0
+        return "🟩" * filled + "⬛" * (length - filled)
+
+    def stats_block():
+        return "\n".join(
+            f"• **{bname(i)}** — ✅ {per_bot_sent[i]} / ❌ {per_bot_failed[i]}"
+            for i in range(len(selected_tokens))
+        )
+
+    def fmt(sent, failed, idx, total, uid=None, current_bot=None):
+        bar = pbar(idx, total)
+        mp = ""
+        if config["message"]:
+            prev = config["message"][:60].replace("\n", " ")
+            mp = f"\n📝 `{prev}{'...' if len(config['message']) > 60 else ''}`"
+        cb = f"\n🤖 Bot actif : **{current_bot}**" if current_bot else ""
+        uid_line = f"\n👤 Dernier : `{uid}`" if uid else ""
+        return (
+            f"## 🚀 Dmall en cours...\n"
+            f"{bar} `{idx}/{total}`\n"
+            f"✅ **{sent}** envoyé(s) | ❌ **{failed}** échoué(s)"
+            f"{mp}{cb}{uid_line}\n\n"
+            f"{stats_block()}"
+        )
+
+    await interaction.edit_original_response(
+        content=fmt(0, 0, 0, len(target_ids)),
+        view=None,
+    )
+    progress_msg = await interaction.original_response()
+
+    sent_total = 0
+    failed_total = 0
+    bot_index = 0
+    try:
+        for i, uid in enumerate(target_ids):
+            tidx = bot_index % len(selected_tokens)
+            token = selected_tokens[tidx]
+            current = bname(tidx)
+            payload = build_dm_payload_for_id(uid)
+            if not payload:
+                failed_total += 1
+                per_bot_failed[tidx] += 1
+            else:
+                ok = await send_dm_via_token(token, uid, payload)
+                if ok:
+                    sent_total += 1
+                    per_bot_sent[tidx] += 1
+                else:
+                    failed_total += 1
+                    per_bot_failed[tidx] += 1
+            bot_index += 1
+            if (i + 1) % 3 == 0 or i == len(target_ids) - 1:
+                try:
+                    await progress_msg.edit(
+                        content=fmt(sent_total, failed_total, i + 1, len(target_ids), uid, current)
+                    )
+                except Exception:
+                    pass
+            await asyncio.sleep(1.2)
+    finally:
+        DMALL_RUNNING = False
+
+    try:
+        await progress_msg.edit(
+            content=(
+                f"## ✅ Dmall terminé !\n"
+                f"✅ **{sent_total}** envoyé(s) | ❌ **{failed_total}** échoué(s)\n\n"
+                f"{stats_block()}"
+            )
+        )
+    except Exception:
+        pass
+
+
+class DmallBotPickView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="🌐 Tous les bots", style=discord.ButtonStyle.danger)
+    async def all_bots(self, interaction, _):
+        if interaction.user.id != OWNER_ID:
+            return await interaction.response.send_message("❌", ephemeral=True)
+        await interaction.response.defer()
+        await run_dmall(interaction, list(config["tokens"]), list(config["token_infos"]))
+
+    @discord.ui.button(label="🤖 Choisir un bot", style=discord.ButtonStyle.primary)
+    async def pick_one(self, interaction, _):
+        if interaction.user.id != OWNER_ID:
+            return await interaction.response.send_message("❌", ephemeral=True)
+        if not config["tokens"]:
+            return await interaction.response.send_message("❌ Aucun bot.", ephemeral=True)
+        opts = [
+            discord.SelectOption(
+                label=info.get("name", f"Bot {i+1}")[:100],
+                value=str(i),
+                description=f"Bot #{i+1}"
+            )
+            for i, info in enumerate(config["token_infos"])
+        ]
+        if not opts:
+            opts = [discord.SelectOption(label="Aucun bot", value="-1")]
+        sel = discord.ui.Select(placeholder="Sélectionne un bot...", options=opts[:25])
+
+        async def on_select(inter):
+            if inter.user.id != OWNER_ID:
+                return await inter.response.send_message("❌", ephemeral=True)
+            idx = int(sel.values[0])
+            if idx == -1:
+                return await inter.response.send_message("❌ Aucun bot valide.", ephemeral=True)
+            await inter.response.defer()
+            await run_dmall(
+                inter,
+                [config["tokens"][idx]],
+                [config["token_infos"][idx]],
+            )
+
+        sel.callback = on_select
+        v = discord.ui.View(timeout=60)
+        v.add_item(sel)
+        await interaction.response.edit_message(
+            content="## 🤖 Sélectionne le bot à utiliser :",
+            view=v,
+        )
+
+
 # ─── PanelView ────────────────────────────────────────────────────────────────
 
 class PanelView(discord.ui.View):
@@ -713,98 +858,16 @@ class PanelView(discord.ui.View):
 
     @discord.ui.button(label="🚀 Dmall", style=discord.ButtonStyle.danger, custom_id="dmall_execute_btn")
     async def dmall_execute_btn(self, interaction, _):
-        global DMALL_RUNNING
         if not self.is_owner(interaction): return await interaction.response.send_message("❌", ephemeral=True)
-        if DMALL_RUNNING: return await interaction.response.send_message("⏳ Déjà en cours.", ephemeral=True)
+        if DMALL_RUNNING: return await interaction.response.send_message("⏳ Un dmall est déjà en cours.", ephemeral=True)
         if not config["tokens"]: return await interaction.response.send_message("❌ Aucun token.", ephemeral=True)
-        if not config["message"] and not config["embed"]: return await interaction.response.send_message("❌ Aucun message.", ephemeral=True)
+        if not config["message"] and not config["embed"]: return await interaction.response.send_message("❌ Aucun message configuré.", ephemeral=True)
         if not config["target_ids"]: return await interaction.response.send_message("❌ Aucun membre. Configure via **⚙️ Options DM**.", ephemeral=True)
-
-        tokens = list(config["tokens"])
-        token_infos = list(config["token_infos"])
-        target_ids = [uid for uid in config["target_ids"] if uid not in config["ignored_ids"]]
-
-        DMALL_RUNNING = True
-
-        def bot_name(i):
-            if i < len(token_infos):
-                return token_infos[i].get("name", f"Bot {i+1}")
-            return f"Bot {i+1}"
-
-        per_bot_sent = [0] * len(tokens)
-        per_bot_failed = [0] * len(tokens)
-
-        def pbar(idx, total, length=10):
-            filled = round((idx / total) * length) if total > 0 else 0
-            return "🟩" * filled + "⬛" * (length - filled)
-
-        def stats_block():
-            return "\n".join(
-                f"• **{bot_name(i)}** — ✅ {per_bot_sent[i]} / ❌ {per_bot_failed[i]}"
-                for i in range(len(tokens))
-            )
-
-        def fmt(sent, failed, idx, total, uid=None, current_bot=None):
-            bar = pbar(idx, total)
-            mp = ""
-            if config["message"]:
-                prev = config["message"][:60].replace("\n", " ")
-                mp = f"\n📝 `{prev}{'...' if len(config['message']) > 60 else ''}`"
-            cb = f"\n🤖 **{current_bot}**" if current_bot else ""
-            uid_line = f"\n👤 Dernier : `{uid}`" if uid else ""
-            return (
-                f"## 🚀 Dmall en cours...\n"
-                f"{bar} `{idx}/{total}`\n"
-                f"✅ **{sent}** envoyé(s) | ❌ **{failed}** échoué(s)"
-                f"{mp}{cb}{uid_line}\n\n"
-                f"{stats_block()}"
-            )
-
         await interaction.response.send_message(
-            fmt(0, 0, 0, len(target_ids)), ephemeral=True
+            f"## 🚀 Lancer le Dmall\n**Sélectionne le(s) bot(s) à utiliser :**\n👥 **{len(config['target_ids'])}** cibles",
+            view=DmallBotPickView(),
+            ephemeral=True,
         )
-        progress_message = await interaction.original_response()
-        sent_total = 0
-        failed_total = 0
-        bot_index = 0
-        try:
-            for i, uid in enumerate(target_ids):
-                tidx = bot_index % len(tokens)
-                token = tokens[tidx]
-                bname = bot_name(tidx)
-                payload = build_dm_payload_for_id(uid)
-                if not payload:
-                    failed_total += 1
-                    per_bot_failed[tidx] += 1
-                else:
-                    ok = await send_dm_via_token(token, uid, payload)
-                    if ok:
-                        sent_total += 1
-                        per_bot_sent[tidx] += 1
-                    else:
-                        failed_total += 1
-                        per_bot_failed[tidx] += 1
-                bot_index += 1
-                if (i + 1) % 5 == 0 or i == len(target_ids) - 1:
-                    try:
-                        await progress_message.edit(
-                            content=fmt(sent_total, failed_total, i + 1, len(target_ids), uid, bname)
-                        )
-                    except Exception:
-                        pass
-                await asyncio.sleep(1.2)
-        finally:
-            DMALL_RUNNING = False
-
-        final = (
-            f"## ✅ Dmall terminé !\n"
-            f"✅ **{sent_total}** envoyé(s) | ❌ **{failed_total}** échoué(s)\n\n"
-            f"{stats_block()}"
-        )
-        try:
-            await progress_message.edit(content=final)
-        except Exception:
-            pass
 
 
 @bot.command(name="panel")
