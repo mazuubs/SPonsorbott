@@ -750,6 +750,88 @@ class PanelView(discord.ui.View):
             bar = pbar(idx, total)
             mp = ""
             if config["message"]:
-                prev = config["message"][:60].replace("\n", " ") **...**
+                prev = config["message"][:60].replace("\n", " ")                 mp = f"\n📝 `{prev}{'...' if len(config['message']) > 60 else ''}`"
+            cb = f"\n🤖 **{current_bot}**" if current_bot else ""
+            uid_line = f"\n👤 Dernier : `{uid}`" if uid else ""
+            return (
+                f"## 🚀 Dmall en cours...\n"
+                f"{bar} `{idx}/{total}`\n"
+                f"✅ **{sent}** envoyé(s) | ❌ **{failed}** échoué(s)"
+                f"{mp}{cb}{uid_line}\n\n"
+                f"{stats_block()}"
+            )
 
-_This response is too long to display in full._
+        await interaction.response.send_message(
+            fmt(0, 0, 0, len(target_ids)), ephemeral=True
+        )
+        progress_message = await interaction.original_response()
+        sent_total = 0
+        failed_total = 0
+        bot_index = 0
+        try:
+            for i, uid in enumerate(target_ids):
+                tidx = bot_index % len(tokens)
+                token = tokens[tidx]
+                bname = bot_name(tidx)
+                payload = build_dm_payload_for_id(uid)
+                if not payload:
+                    failed_total += 1
+                    per_bot_failed[tidx] += 1
+                else:
+                    ok = await send_dm_via_token(token, uid, payload)
+                    if ok:
+                        sent_total += 1
+                        per_bot_sent[tidx] += 1
+                    else:
+                        failed_total += 1
+                        per_bot_failed[tidx] += 1
+                bot_index += 1
+                if (i + 1) % 5 == 0 or i == len(target_ids) - 1:
+                    try:
+                        await progress_message.edit(
+                            content=fmt(sent_total, failed_total, i + 1, len(target_ids), uid, bname)
+                        )
+                    except Exception:
+                        pass
+                await asyncio.sleep(1.2)
+        finally:
+            DMALL_RUNNING = False
+
+        final = (
+            f"## ✅ Dmall terminé !\n"
+            f"✅ **{sent_total}** envoyé(s) | ❌ **{failed_total}** échoué(s)\n\n"
+            f"{stats_block()}"
+        )
+        try:
+            await progress_message.edit(content=final)
+        except Exception:
+            pass
+
+
+@bot.command(name="panel")
+async def panel_cmd(ctx):
+    if ctx.author.id != OWNER_ID:
+        return
+    try:
+        data = await send_panel_v2(ctx.channel.id)
+        config["panel_message_id"] = data["id"]
+        config["panel_channel_id"] = ctx.channel.id
+        save_config()
+        await ctx.message.delete()
+    except Exception as e:
+        await ctx.send(f"❌ Erreur : {e}", delete_after=10)
+
+
+@bot.event
+async def on_ready():
+    global VIEWS_READY
+    load_config()
+    if not VIEWS_READY:
+        bot.add_view(PanelView())
+        bot.add_view(MessageConfigView())
+        bot.add_view(DmOptionsView())
+        VIEWS_READY = True
+    print(f"[OK] {bot.user} connecté ({len(bot.guilds)} serveur(s))")
+
+
+bot.run(os.environ.get("TOKEN", ""))
