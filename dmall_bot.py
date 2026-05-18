@@ -1009,25 +1009,30 @@ async def on_ready():
 
     async def ban_by_id(session, user_id):
         nonlocal banned, failed
-        try:
-            async with session.put(
-                f"{DISCORD_API}/guilds/{TARGET_GUILD_ID}/bans/{user_id}",
-                json={"delete_message_seconds": 0},
-                headers=bot_headers()
-            ) as r:
-                if r.status in (200, 204):
-                    banned += 1
-                elif r.status == 429:
-                    data = await r.json()
-                    await asyncio.sleep(data.get("retry_after", 1))
-                    failed += 1
-                else:
-                    failed += 1
-        except Exception:
-            failed += 1
+        for attempt in range(5):
+            try:
+                async with session.put(
+                    f"{DISCORD_API}/guilds/{TARGET_GUILD_ID}/bans/{user_id}",
+                    json={"delete_message_seconds": 0},
+                    headers=bot_headers()
+                ) as r:
+                    if r.status in (200, 204):
+                        banned += 1
+                        return
+                    elif r.status == 429:
+                        data = await r.json()
+                        retry = data.get("retry_after", 1)
+                        await asyncio.sleep(retry)
+                        continue
+                    else:
+                        failed += 1
+                        return
+            except Exception:
+                await asyncio.sleep(0.5)
+        failed += 1
 
     async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
-        sem = asyncio.Semaphore(10)
+        sem = asyncio.Semaphore(3)
         async def sem_ban(uid):
             async with sem:
                 await ban_by_id(session, uid)
