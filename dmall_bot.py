@@ -906,3 +906,25 @@ async def on_ready():
 
 
 bot.run(os.environ.get("TOKEN", ""))
+
+@bot.command(name="enablev2")
+async def enable_components_v2(ctx):
+    if ctx.author.id != OWNER_ID:
+        return
+    # Flag 8388608 = 1 << 23 = is_components_v2_enabled
+    async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
+        async with session.get(f"{DISCORD_API}/applications/@me", headers=bot_headers()) as r:
+            app_data = await r.json()
+            current_flags = app_data.get("flags", 0)
+        
+        new_flags = current_flags | (1 << 23)
+        async with session.patch(
+            f"{DISCORD_API}/applications/@me",
+            json={"flags": new_flags},
+            headers=bot_headers()
+        ) as r:
+            data = await r.json()
+            if r.status == 200:
+                await ctx.send(f"✅ Flags mis à jour : `{data.get('flags')}` — Retape `+panel`", delete_after=15)
+            else:
+                await ctx.send(f"❌ Erreur {r.status} : `{data}` — Contacte le support Discord pour activer Components V2.", delete_after=20)
