@@ -762,8 +762,8 @@ async def run_dmall(interaction, selected_tokens, selected_infos):
     await interaction.edit_original_response(content=fmt(), view=None)
     progress_msg = await interaction.original_response()
 
-    # Semaphore : 5 DMs simultanés par bot pour maximiser la vitesse
-    CONCURRENT_PER_BOT = 5
+    # Semaphore : 25 DMs simultanés par bot pour maximiser la vitesse
+    CONCURRENT_PER_BOT = 25
 
     async def bot_worker(tidx, token, chunk):
         sem = asyncio.Semaphore(CONCURRENT_PER_BOT)
