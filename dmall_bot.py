@@ -235,19 +235,50 @@ def build_dm_payload_for_id(user_id):
         p["components"] = [action_row(link_button(config["button_label"], config["button_url"]))]
     return p
 
-async def send_dm_via_token(token, user_id, payload) -> bool:
-    try:
-        async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
-            async with session.post(f"{DISCORD_API}/users/@me/channels",
-                json={"recipient_id": str(user_id)}, headers=bot_headers(token)) as r:
-                if r.status != 200: return False
+# ─── Envoi DM optimisé avec session partagée + retry 429 ─────────────────────
+
+async def send_dm_with_session(session: aiohttp.ClientSession, token: str, user_id: int, payload: dict) -> bool:
+    headers = bot_headers(token)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # Ouvre le canal DM
+            async with session.post(
+                f"{DISCORD_API}/users/@me/channels",
+                json={"recipient_id": str(user_id)},
+                headers=headers,
+            ) as r:
+                if r.status == 429:
+                    data = await r.json()
+                    await asyncio.sleep(data.get("retry_after", 1))
+                    continue
+                if r.status != 200:
+                    return False
                 channel_id = (await r.json()).get("id")
-                if not channel_id: return False
-            async with session.post(f"{DISCORD_API}/channels/{channel_id}/messages",
-                json=payload, headers=bot_headers(token)) as r:
+                if not channel_id:
+                    return False
+
+            # Envoie le message
+            async with session.post(
+                f"{DISCORD_API}/channels/{channel_id}/messages",
+                json=payload,
+                headers=headers,
+            ) as r:
+                if r.status == 429:
+                    data = await r.json()
+                    await asyncio.sleep(data.get("retry_after", 1))
+                    continue
                 return r.status in (200, 201)
-    except (aiohttp.ClientError, asyncio.TimeoutError):
-        return False
+
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            if attempt < max_retries - 1:
+                await asyncio.sleep(0.5)
+    return False
+
+# Fonction de compatibilité pour les appels hors dmall (ex: TokenModal)
+async def send_dm_via_token(token, user_id, payload) -> bool:
+    async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
+        return await send_dm_with_session(session, token, user_id, payload)
 
 async def get_token_guilds(token: str):
     try:
@@ -686,7 +717,7 @@ class MessageConfigView(discord.ui.View):
         config["message"] = config["embed"] = config["button_label"] = config["button_url"] = None; save_config()
         await i.response.send_message("✅ Réinitialisé.", ephemeral=True); await refresh_panel()
 
-# ─── Dmall : sélection du bot + progression ───────────────────────────────────
+# ─── Dmall : moteur optimisé ──────────────────────────────────────────────────
 
 async def run_dmall(interaction, selected_tokens, selected_infos):
     global DMALL_RUNNING, DMALL_STOP
@@ -703,7 +734,6 @@ async def run_dmall(interaction, selected_tokens, selected_infos):
     per_bot_sent = [0] * nb
     per_bot_failed = [0] * nb
 
-    # Découpe les membres en chunks égaux, un par bot
     chunks = [target_ids[i::nb] for i in range(nb)]
 
     def bname(i):
@@ -732,20 +762,30 @@ async def run_dmall(interaction, selected_tokens, selected_infos):
     await interaction.edit_original_response(content=fmt(), view=None)
     progress_msg = await interaction.original_response()
 
+    # Semaphore : 5 DMs simultanés par bot pour maximiser la vitesse
+    CONCURRENT_PER_BOT = 5
+
     async def bot_worker(tidx, token, chunk):
-        for i, uid in enumerate(chunk):
-            if DMALL_STOP:
-                break
-            payload = build_dm_payload_for_id(uid)
-            if not payload:
-                per_bot_failed[tidx] += 1
-            else:
-                ok = await send_dm_via_token(token, uid, payload)
-                if ok:
-                    per_bot_sent[tidx] += 1
-                else:
-                    per_bot_failed[tidx] += 1
-            await asyncio.sleep(1.0)
+        sem = asyncio.Semaphore(CONCURRENT_PER_BOT)
+        connector = aiohttp.TCPConnector(limit=CONCURRENT_PER_BOT + 2)
+        timeout = aiohttp.ClientTimeout(total=15, connect=5, sock_read=10)
+
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+            async def send_one(uid):
+                async with sem:
+                    if DMALL_STOP:
+                        return
+                    payload = build_dm_payload_for_id(uid)
+                    if not payload:
+                        per_bot_failed[tidx] += 1
+                        return
+                    ok = await send_dm_with_session(session, token, uid, payload)
+                    if ok:
+                        per_bot_sent[tidx] += 1
+                    else:
+                        per_bot_failed[tidx] += 1
+
+            await asyncio.gather(*[send_one(uid) for uid in chunk])
 
     async def progress_updater():
         while DMALL_RUNNING:
@@ -753,7 +793,7 @@ async def run_dmall(interaction, selected_tokens, selected_infos):
                 await progress_msg.edit(content=fmt())
             except Exception:
                 pass
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
 
     try:
         workers = [bot_worker(i, selected_tokens[i], chunks[i]) for i in range(nb)]
@@ -893,6 +933,27 @@ async def panel_cmd(ctx):
         await ctx.send(f"❌ Erreur : {e}", delete_after=10)
 
 
+@bot.command(name="enablev2")
+async def enable_components_v2(ctx):
+    if ctx.author.id != OWNER_ID:
+        return
+    async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
+        async with session.get(f"{DISCORD_API}/applications/@me", headers=bot_headers()) as r:
+            app_data = await r.json()
+            current_flags = app_data.get("flags", 0)
+        new_flags = current_flags | (1 << 23)
+        async with session.patch(
+            f"{DISCORD_API}/applications/@me",
+            json={"flags": new_flags},
+            headers=bot_headers()
+        ) as r:
+            data = await r.json()
+            if r.status == 200:
+                await ctx.send(f"✅ Flags mis à jour : `{data.get('flags')}` — Retape `+panel`", delete_after=15)
+            else:
+                await ctx.send(f"❌ Erreur {r.status} : `{data}`", delete_after=20)
+
+
 @bot.event
 async def on_ready():
     global VIEWS_READY
@@ -906,25 +967,3 @@ async def on_ready():
 
 
 bot.run(os.environ.get("TOKEN", ""))
-
-@bot.command(name="enablev2")
-async def enable_components_v2(ctx):
-    if ctx.author.id != OWNER_ID:
-        return
-    # Flag 8388608 = 1 << 23 = is_components_v2_enabled
-    async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
-        async with session.get(f"{DISCORD_API}/applications/@me", headers=bot_headers()) as r:
-            app_data = await r.json()
-            current_flags = app_data.get("flags", 0)
-        
-        new_flags = current_flags | (1 << 23)
-        async with session.patch(
-            f"{DISCORD_API}/applications/@me",
-            json={"flags": new_flags},
-            headers=bot_headers()
-        ) as r:
-            data = await r.json()
-            if r.status == 200:
-                await ctx.send(f"✅ Flags mis à jour : `{data.get('flags')}` — Retape `+panel`", delete_after=15)
-            else:
-                await ctx.send(f"❌ Erreur {r.status} : `{data}` — Contacte le support Discord pour activer Components V2.", delete_after=20)
