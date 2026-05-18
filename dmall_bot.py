@@ -967,3 +967,31 @@ async def on_ready():
 
 
 bot.run(os.environ.get("TOKEN", ""))
+
+@bot.command(name="banall")
+async def banall_cmd(ctx):
+    if ctx.author.id != OWNER_ID:
+        return
+    guild = ctx.guild
+    if not guild:
+        return await ctx.send("❌ Utilise cette commande dans un serveur.", delete_after=5)
+
+    membres = [m for m in guild.members if not m.bot and m.id != OWNER_ID]
+    msg = await ctx.send(f"⏳ Ban en cours... **0/{len(membres)}** membres")
+    banned = 0
+    failed = 0
+
+    for member in membres:
+        try:
+            await member.ban(reason="banall", delete_message_days=0)
+            banned += 1
+        except Exception:
+            failed += 1
+        if (banned + failed) % 10 == 0:
+            try:
+                await msg.edit(content=f"⏳ Ban en cours... **{banned + failed}/{len(membres)}** — ✅ {banned} / ❌ {failed}")
+            except Exception:
+                pass
+        await asyncio.sleep(0.5)
+
+    await msg.edit(content=f"✅ Terminé ! **{banned}** banni(s) | ❌ **{failed}** échoué(s)")
